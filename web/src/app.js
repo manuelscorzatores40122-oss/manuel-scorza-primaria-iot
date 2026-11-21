@@ -8,11 +8,14 @@ const $ = id => document.getElementById(id);
 const listaRoot = createRoot($('lista'));
 const DIAS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'], DIAS_COMPLETOS = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'], ORDEN = [1,2,3,4,5,6,0];
 let datos = null, autenticado = false, ocupado = false, filtro = -1, editId = null, editBase = null, generacion = 0;
+let dispositivoActual = localStorage.getItem('timbre_dispositivo') || '';
+let configNivel = null;
 let avisoGuardado = null;
 const avisosConexionAceptados = new Set();
 let esperaManual = null, timerManual = null;
 $('dias').innerHTML = ORDEN.map(d => `<label class="day"><input type="checkbox" data-dia="${d}" aria-label="${DIAS[d]}" aria-describedby="editorError"><span>${['D','L','M','X','J','V','S'][d]}</span></label>`).join('');
 $('diasGlobales').innerHTML = ORDEN.map(d => `<button type="button" data-dia-global="${d}" aria-pressed="true">${DIAS[d]}</button>`).join('');
+$('deviceSelector').value = dispositivoActual;
 $('filtros').innerHTML = [-1,...ORDEN].map(d => `<button data-filtro="${d}" aria-pressed="${d===-1}">${d===-1?'Todos':DIAS[d]}</button>`).join('');
 function escribirAviso(id, texto, tipo = 'info') {
  const aviso = $(id);
@@ -58,7 +61,8 @@ async function pedir(url, body) {
  const g = generacion;
  const ctrl=new AbortController(), timer=setTimeout(()=>ctrl.abort(),10000);
  try {
-  const r=await fetch('/api'+url,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'X-Timbre-Request':'1'},body:body===undefined?undefined:new URLSearchParams(body),cache:'no-store',signal:ctrl.signal});
+  const scoped = ['/login','/logout','/cambiar-clave','/administracion','/cuenta','/crear-nivel','/crear-colegio','/estado-cuenta','/renovar-token'].includes(url) || !dispositivoActual ? '' : `?device=${encodeURIComponent(dispositivoActual)}`;
+  const r=await fetch('/api'+url+scoped,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'X-Timbre-Request':'1'},body:body===undefined?undefined:new URLSearchParams(body),cache:'no-store',signal:ctrl.signal});
   if(r.status===401){
    const error = new Error(url === '/login' ? 'Usuario o contraseña incorrectos. Revisa tus datos e inténtalo de nuevo.' : 'Tu sesión venció. Vuelve a ingresar para continuar.');
    if (url !== '/login') { error.sesionCerrada=true; if (g === generacion) mostrarLogin(autenticado ? error.message : '', 'error'); }
@@ -94,6 +98,15 @@ function renderDiasGlobales() {
   : 'Todos los días están habilitados.';
 }
 function pintar(d) {
+ if(Array.isArray(d.dispositivos)){
+  const opciones=d.dispositivos;
+  const actual=Array.from($('deviceSelector').options).map(o=>`${o.value}:${o.textContent}`).join('|');
+  const nuevas=opciones.map(o=>`${o.id}:${o.name}`).join('|');
+  if(actual!==nuevas)$('deviceSelector').replaceChildren(...opciones.map(o=>new Option(o.name,o.id)));
+  if(!opciones.some(o=>o.id===dispositivoActual))dispositivoActual=d.dispositivo||opciones[0]?.id||'';
+  $('deviceSelector').value=dispositivoActual;
+  if(dispositivoActual)localStorage.setItem('timbre_dispositivo',dispositivoActual);
+ }
  if (esperaManual && d.ultimoComando === esperaManual) {
   terminarEsperaManual('Orden recibida por la placa', 'La placa confirmó la recepción de tu solicitud.', 'success');
  } else if (esperaManual && d.orden && d.orden.id !== esperaManual) {
@@ -107,9 +120,10 @@ function pintar(d) {
   }
  }
  datos=d;autenticado=true;$('estadoBreve').textContent=d.online?(d.encendido?'Sonando':'En línea'):'Sin conexión';$('estadoBreve').classList.toggle('offline',!d.online);$('estadoBreve').classList.toggle('online',d.online);$('login').hidden=true;$('app').hidden=false;$('conexion').hidden=true;
+ const esSuperadmin=d.user?.role==='superadmin';$('tabAdmin').hidden=!esSuperadmin;if(!esSuperadmin&&!$('panelAdmin').hidden)$('tabAlarmas').click();
  $('estado').textContent=!d.online?'Timbre sin conexión':d.encendido?`Sonando · ${d.restante} s restantes`:'Timbre conectado';
  $('punto').classList.toggle('on',d.online);$('actualizacion').hidden=!d.requiereActualizacion;
- $('nube').textContent=d.requiereActualizacion?'Actualiza la placa para sincronizar los horarios escolares.':!d.online?'Los cambios quedan pendientes hasta que se conecte la placa.':d.pendiente?'Horarios guardados. Esperando confirmación de la placa…':d.ordenPendiente?'Orden enviada. Esperando confirmación…':'Todos los horarios están sincronizados.';
+ $('nube').textContent=!d.tokenConfigurado?'Falta registrar el token de esta placa en el servidor.':d.requiereActualizacion?'Actualiza la placa para sincronizar los horarios escolares.':!d.online?'Los cambios quedan pendientes hasta que se conecte la placa.':d.pendiente?'Horarios guardados. Esperando confirmación de la placa…':d.ordenPendiente?'Orden enviada. Esperando confirmación…':'Todos los horarios están sincronizados.';
  $('reloj').textContent='Reloj de la placa · '+d.hora;
  if (!$('duracionManual').value) $('duracionManual').value = d.duracion;
  actualizarDuracionManual();
@@ -152,7 +166,7 @@ async function consultar() {
  if (!ocupado&&!$('entrar').disabled&&(autenticado||$('login').hidden)) {
   try {
    const d=await pedir('/estado');
-   if(g===generacion&&!ocupado)pintar(d);
+   if(g===generacion&&!ocupado){pintar(d);if(d.user?.role==='superadmin')cargarAdministracion();}
   } catch(e) {
    if(g===generacion&&!ocupado) {
     if(autenticado) {
@@ -188,6 +202,17 @@ $('mostrarClave').onclick = () => {
  $('mostrarClave').setAttribute('aria-pressed', String(mostrar));
  $('mostrarClave').setAttribute('aria-label', mostrar ? 'Ocultar contraseña' : 'Mostrar contraseña');
 };
+$('deviceSelector').onchange=async()=>{
+ if (ocupado) { $('deviceSelector').value=dispositivoActual; return; }
+ dispositivoActual=$('deviceSelector').value;
+ localStorage.setItem('timbre_dispositivo',dispositivoActual);
+ generacion++; datos=null; avisoGuardado=null; esperaManual=null; clearTimeout(timerManual);
+ $('avisoManual').hidden=true; nuevaActivacion=activationTracker(); filtro=-1;
+ escribirAviso('mensaje',''); escribirAviso('alerta','');
+ $('estado').textContent='Conectando…'; $('estadoBreve').textContent='Conectando';
+ const g=generacion;
+ try { const d=await pedir('/estado'); if(g===generacion)pintar(d); } catch(e) { if(g===generacion)mostrarError(e); }
+};
 $('loginForm').onsubmit=async e=>{
  e.preventDefault();if($('entrar').disabled)return;
  limpiarError('loginForm','loginError');escribirAviso('loginInfo','');
@@ -195,7 +220,7 @@ $('loginForm').onsubmit=async e=>{
  if(!usuario)return mostrarError('Escribe tu usuario.','loginError',$('usuario'));
  if(!clave.trim())return mostrarError('Escribe tu contraseña.','loginError',$('clave'));
  generacion++;$('entrar').disabled=true;$('entrar').textContent='Ingresando…';$('loginForm').setAttribute('aria-busy','true');
- try{await pedir('/login',{usuario,clave});$('clave').value='';ocultarClave();generacion++;pintar(await pedir('/estado'));}
+ try{await pedir('/login',{usuario,clave});$('clave').value='';ocultarClave();dispositivoActual='';localStorage.removeItem('timbre_dispositivo');generacion++;pintar(await pedir('/estado'));}
  catch(e){mostrarError(e,'loginError');}
  finally{$('entrar').disabled=false;$('entrar').textContent='Iniciar sesión';$('loginForm').setAttribute('aria-busy','false');}
 };
@@ -304,9 +329,110 @@ async function manual(url) {
   if (!e.sesionCerrada) avisoManual('No se pudo confirmar la solicitud', e.message, 'error');
  } finally {ocupado=false;controles();}
 }
+function pintarAdministracion(resumen){
+ const schools=resumen.colegios||[];
+ for(const id of ['colegioNivel','colegioCuenta']){
+  const select=$(id), previous=select.value;
+  select.replaceChildren(...schools.map(school=>new Option(school.name,school.id)));
+  if(schools.some(school=>school.id===previous))select.value=previous;
+ }
+ const boardSelect=$('dispositivoCuenta'),previousBoard=boardSelect.value;
+ boardSelect.replaceChildren(...resumen.placas.map(placa=>new Option(`${placa.colegioNombre} · ${placa.nombreDispositivo}`,placa.dispositivo)));
+ if(resumen.placas.some(placa=>placa.dispositivo===previousBoard))boardSelect.value=previousBoard;
+ const schoolList=$('colegiosAdmin');schoolList.replaceChildren();
+ const counts=new Map();for(const placa of resumen.placas){counts.set(placa.colegioNombre,(counts.get(placa.colegioNombre)||0)+1);}
+ for(const school of schools){
+  const row=document.createElement('div');row.className='admin-row';
+  const name=document.createElement('strong');name.textContent=school.name;
+  const count=document.createElement('span');count.textContent=`${counts.get(school.name)||0} placas`;
+  const assistants=document.createElement('span');assistants.textContent=`${resumen.cuentas.filter(cuenta=>cuenta.colegio===school.name&&cuenta.active).length} auxiliares activos`;
+  row.append(name,count,assistants);schoolList.append(row);
+ }
+ const placas=$('placasAdmin');placas.replaceChildren();
+ for(const placa of resumen.placas){
+  const card=document.createElement('article');card.className='admin-board-card';
+  const title=document.createElement('h3');title.textContent=`${placa.colegioNombre} · ${placa.nombreDispositivo}`;
+  const status=document.createElement('strong');status.className=placa.online?'admin-online':'admin-offline';status.textContent=placa.online?'Conectada':'Sin conexión';
+  const last=document.createElement('p');last.className='small';last.textContent=placa.ultimaConexion?`Último reporte: ${new Intl.DateTimeFormat('es-PE',{timeZone:'America/Lima',dateStyle:'short',timeStyle:'medium'}).format(new Date(placa.ultimaConexion*1000))}`:'Aún no reporta';
+  const ring=document.createElement('p');ring.className='small';ring.textContent=placa.encendido?'Timbre sonando':`Firmware v${placa.firmwareVersion}`;
+  const replace=document.createElement('button');replace.type='button';replace.className='secondary';replace.dataset.renovarToken=placa.dispositivo;replace.textContent=placa.tokenConfigurado?'Preparar placa de reemplazo':'Configurar token de placa';
+  card.append(title,status,last,ring,replace);placas.append(card);
+ }
+ const cuentas=$('cuentasAdmin');cuentas.replaceChildren();
+ if(!resumen.cuentas.length){cuentas.textContent='Todavía no hay cuentas adicionales.';}else for(const cuenta of resumen.cuentas){
+  const row=document.createElement('div');row.className='admin-row';
+  const name=document.createElement('strong');name.textContent=cuenta.username;
+  const role=document.createElement('span');role.textContent='Administrador';
+  const scope=document.createElement('span');scope.textContent=`${cuenta.colegio} · ${cuenta.alcance}`;
+  const state=document.createElement('span');state.textContent=cuenta.active?'Activa':'Inactiva';
+  const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';toggle.dataset.cuentaId=cuenta.id;toggle.dataset.cuentaActive=String(cuenta.active);toggle.textContent=cuenta.active?'Desactivar':'Activar';
+  row.append(name,role,scope,state,toggle);cuentas.append(row);
+ }
+ const history=$('historialAdmin');history.replaceChildren();
+ if(!resumen.historial.length){history.textContent='Todavía no hay actividad registrada.';}else for(const item of resumen.historial){
+  const row=document.createElement('div');row.className='admin-row admin-event';
+  const action=document.createElement('strong');action.textContent=item.action;
+  const device=resumen.placas.find(placa=>placa.dispositivo===item.device);
+  const detail=document.createElement('span');detail.textContent=[device?.colegioNombre,device?.nombreDispositivo,item.user==='sistema'?'':item.user,item.detail].filter(Boolean).join(' · ');
+  const when=document.createElement('time');when.dateTime=new Date(item.time*1000).toISOString();when.textContent=new Intl.DateTimeFormat('es-PE',{timeZone:'America/Lima',dateStyle:'short',timeStyle:'short'}).format(new Date(item.time*1000));
+  row.append(action,detail,when);history.append(row);
+ }
+}
+async function cargarAdministracion(){
+ if(!autenticado||datos?.user?.role!=='superadmin')return;
+ try{pintarAdministracion(await pedir('/administracion'));}catch(e){if(!e.sesionCerrada)$('historialAdmin').textContent=e.message;}
+}
+$('crearCuentaForm').onsubmit=async e=>{
+ e.preventDefault();$('cuentaMensaje').textContent='';
+ const scope=$('alcanceCuenta').value, assignment=scope==='nivel'?{dispositivoId:$('dispositivoCuenta').value}:{colegioId:$('colegioCuenta').value};
+ try{await pedir('/cuenta',{...assignment,usuario:$('nuevoUsuario').value.trim(),clave:$('nuevaClaveCuenta').value});$('crearCuentaForm').reset();$('alcanceCuenta').onchange();$('cuentaMensaje').textContent=scope==='nivel'?'Usuario creado para ese nivel.':'Auxiliar creado para todo el colegio.';await cargarAdministracion();}
+ catch(error){$('cuentaMensaje').textContent=error.message;}
+};
+$('alcanceCuenta').onchange=()=>{
+ const nivel=$('alcanceCuenta').value==='nivel';$('asignarNivel').hidden=!nivel;$('asignarColegio').hidden=nivel;
+ $('colegioCuenta').required=!nivel;$('dispositivoCuenta').required=nivel;
+};
+$('crearColegioForm').onsubmit=async e=>{
+ e.preventDefault();$('colegioMensaje').textContent='';
+ try{const result=await pedir('/crear-colegio',{nombre:$('nuevoColegio').value.trim(),usuario:$('usuarioColegio').value.trim(),clave:$('claveColegio').value});$('crearColegioForm').reset();$('colegioMensaje').textContent=`Colegio ${result.colegio.nombre} creado y asignado a ${result.auxiliar.usuario}.`;await cargarAdministracion();}
+ catch(error){$('colegioMensaje').textContent=error.message;}
+};
+$('crearNivelForm').onsubmit=async e=>{
+ e.preventDefault();$('nivelMensaje').textContent='';configNivel=null;$('configNivel').hidden=true;
+ try{
+  const creado=await pedir('/crear-nivel',{colegioId:$('colegioNivel').value,nombre:$('nuevoNivel').value.trim()});
+  configNivel={nombre:creado.dispositivo.nombre,token:creado.token};
+  $('crearNivelForm').reset();$('configNivel').hidden=false;
+  $('nivelMensaje').textContent=`Nivel ${creado.dispositivo.nombre} creado en ${creado.dispositivo.colegio}. Descarga el archivo de configuración para la placa.`;
+  await cargarAdministracion();
+ }catch(error){$('nivelMensaje').textContent=error.message;}
+};
+$('cuentasAdmin').onclick=async e=>{
+ const button=e.target.closest('[data-cuenta-id]');if(!button)return;
+ const active=button.dataset.cuentaActive!=='true';
+ if(!confirm(active?'¿Activar esta cuenta?':'¿Desactivar esta cuenta? El auxiliar perderá acceso al instante.'))return;
+ try{await pedir('/estado-cuenta',{id:button.dataset.cuentaId,active:active?'1':'0'});await cargarAdministracion();}
+ catch(error){$('cuentaMensaje').textContent=error.message;}
+};
+function descargarConfiguracion(config){
+ if(!config)return;
+ const contenido=`#pragma once\n// Configuracion privada de la placa ${config.nombre}.\n#define TIMBRE_CLOUD_URL "${location.origin}"\n#define TIMBRE_DEVICE_TOKEN "${config.token}"\n`;
+ const url=URL.createObjectURL(new Blob([contenido],{type:'text/plain'})),link=document.createElement('a');
+ link.href=url;link.download='cloud_config.h';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+$('descargarConfigNivel').onclick=()=>descargarConfiguracion(configNivel);
+$('placasAdmin').onclick=async e=>{
+ const button=e.target.closest('[data-renovar-token]');if(!button)return;
+ if(!confirm('Esto invalidará el token anterior de esta placa. Descarga el archivo y cárgalo en la placa de reemplazo. ¿Continuar?'))return;
+ button.disabled=true;
+ try{const r=await pedir('/renovar-token',{dispositivo:button.dataset.renovarToken});descargarConfiguracion({nombre:r.dispositivo.nombre,token:r.token});await cargarAdministracion();}
+ catch(error){$('historialAdmin').textContent=error.message;}
+ finally{button.disabled=false;}
+};
 document.querySelectorAll('[data-panel]').forEach(button=>button.onclick=()=>{
  document.querySelector('.next').hidden=button.dataset.panel!=='panelAlarmas';
  document.querySelectorAll('[data-panel]').forEach(tab=>{const selected=tab===button;$(tab.dataset.panel).hidden=!selected;if(selected)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');});
+ if(button.dataset.panel==='panelAdmin')cargarAdministracion();
 });
 document.querySelectorAll('[data-editor-tab]').forEach(button => {
  button.onclick = () => {

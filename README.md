@@ -4,7 +4,7 @@ Proyecto creado: **timbre-esp32**. URL de producción: https://timbre-esp32.verc
 
 Estado de la preparación: web escolar y API publicadas, Redis conectado mediante variables privadas de Production, login y token del dispositivo configurados, y `cloud_config.h` local preparado. El firmware escolar compila y las pruebas de servicio, protocolo C++ y navegador pasan. Para ejecutar varios horarios hay que cargar esta nueva versión en la placa; la web detecta y avisa si aún usa el protocolo anterior. La programación existente se conserva durante la transición.
 
-Si se rotan las credenciales Redis, actualizar las variables privadas en Vercel y volver a desplegar desde `web/` con `vercel --prod --yes`. No guardar esas credenciales en `.env.example` ni en archivos públicos. También se admiten los nombres `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN`; si existen ambos pares, el par `UPSTASH_` tiene prioridad. El token del dispositivo es independiente y debe coincidir entre Vercel y `cloud_config.h`.
+Si se rotan las credenciales Redis, actualizar las variables privadas en Vercel y volver a desplegar desde `web/` con `vercel --prod --yes`. No guardar esas credenciales en `.env.example` ni en archivos públicos. También se admiten los nombres `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN`; si existen ambos pares, el par `UPSTASH_` tiene prioridad. Cada placa tiene su propio token, que debe coincidir entre `DEVICE_TOKENS` en Vercel y el `cloud_config.h` que se carga en esa placa.
 
 La web de `web/` se publica en Vercel. Sus funciones guardan la alarma, sesiones y órdenes en Upstash Redis. El ESP32 hace solicitudes HTTPS salientes cada 10 segundos; no requiere computadora encendida, IP pública ni abrir puertos del router.
 
@@ -21,22 +21,24 @@ La interfaz permite hasta **32 timbres semanales**. Cada horario tiene nombre (E
 | --- | --- |
 | `ADMIN_USER` | `admin` |
 | `ADMIN_PASSWORD` | `123456` (acceso solicitado; cambiar en Vercel para usar otra clave) |
-| `DEVICE_TOKEN` | Token aleatorio de al menos 32 caracteres, exclusivo de esta placa |
+| `DEVICE_TOKENS` | Objeto JSON con tokens distintos por placa, por ejemplo `{"primaria":"token...","secundaria":"token..."}` |
 | `UPSTASH_REDIS_REST_URL` | URL REST HTTPS de Redis |
 | `UPSTASH_REDIS_REST_TOKEN` | Token REST de Redis |
 
-Generar un token con `openssl rand -hex 32`. El token del dispositivo y las credenciales Redis nunca van en el JavaScript público. El servidor limita el login a 10 intentos por IP cada 10 minutos; las sesiones duran 12 horas y se invalidan al salir.
+Generar un token distinto por placa con `openssl rand -hex 32`. El token del dispositivo y las credenciales Redis nunca van en el JavaScript público. `DEVICE_TOKEN` continúa aceptándose como token de Primaria por compatibilidad, pero para dos placas configura `DEVICE_TOKENS` con las claves `primaria` y `secundaria`. El servidor limita el login a 10 intentos por IP cada 10 minutos; las sesiones duran 12 horas y se invalidan al salir.
 
 Publicar desde `web/` con `vercel --prod`. Usar la URL estable del proyecto (`https://nombre.vercel.app`), no una URL temporal de preview. La web necesita acceso público de red para que la placa llegue a `/api/sync`; la aplicación aplica su propio login y token. Si Deployment Protection bloquea producción, ajustar esa protección para este proyecto antes de conectar la placa.
 
 ## 2. Configurar la placa
 
-Copiar `cloud_config.example.h` a `cloud_config.h` y completar:
+Copiar `cloud_config.example.h` a `cloud_config.h` para cada placa. En cada copia, configura la URL de producción y el token que corresponde al nivel:
 
 ```cpp
 #define TIMBRE_CLOUD_URL "https://nombre.vercel.app"
-#define TIMBRE_DEVICE_TOKEN "mismo-token-de-DEVICE_TOKEN"
+#define TIMBRE_DEVICE_TOKEN "token-de-la-placa-primaria"
 ```
+
+La placa de Secundaria usa el valor `secundaria` de `DEVICE_TOKENS`. Carga en cada ESP32 su propio `cloud_config.h` con el token correspondiente. En la web, el selector **Nivel** cambia entre programaciones independientes. Redis guarda por separado los horarios, el estado de conexión y las órdenes de cada placa. Los dos ESP32 pueden usar la misma red Wi-Fi: el servidor identifica cada uno por su token, no por la red.
 
 `cloud_config.h` está ignorado por Git. Si no existe o la URL está vacía, la placa conserva el funcionamiento local original. Configurar las parejas de nombre y contraseña en `REDES_WIFI` en el sketch. Utilizar Wi-Fi 2.4 GHz.
 
@@ -169,8 +171,11 @@ No publiques `public/` directamente: la interfaz ahora necesita compilación.
 El archivo `web/.env` está excluido de Git. Configura allí
 `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN` con los datos de tu
 base Upstash. `ADMIN_USER` y `ADMIN_PASSWORD` definen el acceso local.
-`DEVICE_TOKEN` debe coincidir con el firmware si conectas una placa a esta API.
-Reinicia el servidor de desarrollo después de cambiar las variables.
+Para usar Primaria y Secundaria, configura `DEVICE_TOKENS` como un objeto JSON
+con un token aleatorio distinto para cada una. El `TIMBRE_DEVICE_TOKEN` de
+cada firmware debe coincidir con el token de su nivel. `DEVICE_TOKEN` sigue
+funcionando como alternativa para Primaria cuando no se define su valor dentro
+de `DEVICE_TOKENS`. Reinicia el servidor después de cambiar las variables.
 
 La marca de campana en `web/public/assets/timbre-mark.svg` identifica la app;
 no sustituye al escudo oficial de la institución.
@@ -188,9 +193,33 @@ cortos. Con firmware anterior solo se detecta el cambio al estado «Sonando».
 Al abrir sesión se establece una referencia sin avisar por eventos anteriores;
 cada evento reciente se anuncia una vez durante la sesión.
 
+### Superadministrador, cuentas e historial
+
+La cuenta definida por `ADMIN_USER`/`ADMIN_PASSWORD` es el superadministrador.
+Desde **Administración** crea cada colegio junto con su auxiliar. El auxiliar
+puede administrar todos los niveles y timbres de su colegio, pero no ve otros
+colegios ni puede crear cuentas. También puede crear cuentas adicionales con
+acceso a todo un colegio o limitadas a un solo nivel. El superadministrador
+puede activarlas o desactivarlas y supervisar todos los colegios. Ve el
+estado de sus placas, la última conexión y hasta 100 eventos recientes. Redis
+conserva hasta 500 eventos de acceso, horarios, órdenes manuales, activaciones
+y cambios de conexión observados mientras el superadministrador tiene sesión.
+Las contraseñas se guardan con scrypt y sal aleatoria.
+
+El superadministrador agrega los niveles dentro del colegio que corresponda.
+La app genera un token propio por placa y ofrece descargar su `cloud_config.h`;
+el token se entrega una sola vez y no se guarda en texto legible en Redis. Copia
+el archivo al sketch del ESP32, configura en el sketch la red Wi-Fi del colegio,
+compila y carga el firmware. Cada auxiliar ve los niveles y placas de su colegio.
+Si una placa falla, puedes cargarle el mismo `cloud_config.h` si conservas una
+copia. Si quieres invalidar el token anterior, usa **Preparar placa de
+reemplazo** desde Administración: la app rota el token y descarga un archivo
+nuevo. La placa antigua dejará de autenticarse y el repuesto conservará el
+nivel y sus horarios.
+
 ### Contraseña de administrador
 
-La aplicación tiene una cuenta administradora (`ADMIN_USER`, por defecto `admin`).
+La cuenta superadministradora usa `ADMIN_USER` (por defecto `admin`).
 `ADMIN_PASSWORD` proporciona la contraseña inicial de entrega. La sección
 Dispositivo no incluye opciones para cambiar o recuperar la contraseña.
 El servicio conserva el cambio autenticado de contraseña mediante la API,

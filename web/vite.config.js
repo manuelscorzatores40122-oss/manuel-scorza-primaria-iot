@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => ({
     configureServer(server) {
       // Estas variables pertenecen al servidor; no se exponen al navegador.
       const env = loadEnv(mode, server.config.root, '');
-      for (const name of ['ADMIN_USER', 'ADMIN_PASSWORD', 'DEVICE_TOKEN', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN']) {
+      for (const name of ['ADMIN_USER', 'ADMIN_PASSWORD', 'DEVICE_TOKEN', 'DEVICE_TOKENS', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN']) {
         if (process.env[name] === undefined && env[name] !== undefined) process.env[name] = env[name];
       }
       server.middlewares.use(async (req, res, next) => {
@@ -26,7 +26,7 @@ export default defineConfig(({ mode }) => ({
             body += chunk;
             if (Buffer.byteLength(body) > 65536) return res.status(413).send('Solicitud demasiado grande');
           }
-          req.query = { action: url.pathname === '/api/control' ? url.searchParams.get('action') : url.pathname.slice(5) };
+          req.query = { action: url.pathname === '/api/control' ? url.searchParams.get('action') : url.pathname.slice(5), device: url.searchParams.get('device') || 'primaria' };
           req.body = body;
           await handler(req, res);
         } catch {
