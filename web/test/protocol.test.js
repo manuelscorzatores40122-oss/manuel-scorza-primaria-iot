@@ -11,7 +11,7 @@ test('la respuesta del servicio JS es aceptada por el parser C++ del ESP32', asy
   const token = 'a'.repeat(64);
   const db = async (command, ...args) => {
     assert.equal(command, 'EVAL');
-    // Configuracion inicial que el propio servicio acaba de serializar para Redis.
+    // Configuracion inicial que el servicio serializa para almacenamiento persistente.
     return [JSON.stringify({...JSON.parse(args[5]),alarmas:[{id:'00000001',hora:'07:30',activa:true,dias:62,duracion:5},{id:'00000002',hora:'10:15',activa:true,dias:62,duracion:8},{id:'00000003',hora:'13:00',activa:true,dias:32,duracion:10}]}), null];
   };
   const service = createService(db, { DEVICE_TOKEN: token });

@@ -597,7 +597,7 @@ void tareaNube(void*) {
       cliente.setHandshakeTimeout(10);
       HTTPClient http;
       http.setConnectTimeout(10000);
-      // Redis puede tardar hasta 7 s; dejar margen para la respuesta de Vercel.
+      // El almacenamiento remoto puede tardar hasta 7 s; dejar margen a Vercel.
       http.setTimeout(10000);
       String url = String(TIMBRE_CLOUD_URL) + "/api/sync";
       if (url.startsWith("https://") && http.begin(cliente, url)) {

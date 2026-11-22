@@ -6,7 +6,7 @@ async function request(method, action, headers = {}) {
   await handler({ method, query: { action }, headers }, response);
   return response;
 }
-test('rutas, método, protección CSRF y autenticación antes de leer Redis', async () => {
+test('rutas, método, protección CSRF y autenticación antes de leer el almacenamiento', async () => {
   assert.equal((await request('GET', 'missing')).code, 404);
   const wrongMethod = await request('GET', 'encender');
   assert.equal(wrongMethod.code, 405); assert.equal(wrongMethod.headers.Allow, 'POST');

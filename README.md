@@ -2,11 +2,11 @@
 
 Proyecto creado: **timbre-esp32**. URL de producción: https://timbre-esp32.vercel.app
 
-Estado de la preparación: web escolar y API publicadas, Redis conectado mediante variables privadas de Production, login y token del dispositivo configurados, y `cloud_config.h` local preparado. El firmware escolar compila y las pruebas de servicio, protocolo C++ y navegador pasan. Para ejecutar varios horarios hay que cargar esta nueva versión en la placa; la web detecta y avisa si aún usa el protocolo anterior. La programación existente se conserva durante la transición.
+Estado de la preparación: web escolar y API publicadas, Neon PostgreSQL configurado mediante variables privadas de Production, login y token del dispositivo configurados, y `cloud_config.h` local preparado. El firmware escolar compila y las pruebas de servicio, protocolo C++ y navegador pasan. Para ejecutar varios horarios hay que cargar esta nueva versión en la placa; la web detecta y avisa si aún usa el protocolo anterior. La programación existente se conserva durante la transición.
 
-Si se rotan las credenciales Redis, actualizar las variables privadas en Vercel y volver a desplegar desde `web/` con `vercel --prod --yes`. No guardar esas credenciales en `.env.example` ni en archivos públicos. También se admiten los nombres `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN`; si existen ambos pares, el par `UPSTASH_` tiene prioridad. Cada placa tiene su propio token, que debe coincidir entre `DEVICE_TOKENS` en Vercel y el `cloud_config.h` que se carga en esa placa.
+Configura `DATABASE_URL` como variable privada en Vercel. No guardes la cadena de conexión en archivos públicos ni en el cliente web. Cada placa tiene su propio token, que debe coincidir entre `DEVICE_TOKENS` en Vercel y el `cloud_config.h` que se carga en esa placa.
 
-La web de `web/` se publica en Vercel. Sus funciones guardan la alarma, sesiones y órdenes en Upstash Redis. El ESP32 hace solicitudes HTTPS salientes cada 10 segundos; no requiere computadora encendida, IP pública ni abrir puertos del router.
+La web de `web/` se publica en Vercel. Sus funciones guardan la alarma, sesiones y órdenes en Neon PostgreSQL. El ESP32 hace solicitudes HTTPS salientes cada 10 segundos; no requiere computadora encendida, IP pública ni abrir puertos del router.
 
 La interfaz permite hasta **32 timbres semanales**. Cada horario tiene nombre (Entrada, Recreo, Salida…), hora y minutos escritos directamente en formato de 24 horas, días, duración e interruptor. Se puede filtrar por día, editar o eliminar horarios. Se rechazan dos timbres activos a la misma hora en días coincidentes. El login y el control manual se conservan. La web indica si el ESP32 está conectado y si confirmó los cambios. Las órdenes manuales vencen en 30 segundos y no se aceptan cuando la última conexión de la placa tiene más de 35 segundos. La última orden reemplaza a la anterior. La confirmación puede tardar otro ciclo de consulta.
 
@@ -14,7 +14,7 @@ La interfaz permite hasta **32 timbres semanales**. Cada horario tiene nombre (E
 
 - Importar o desplegar la carpeta **web** (no la carpeta raíz del sketch).
 - Framework: **Other**. Output Directory: **dist**. Comando de build: `npm run build` (configurado en `web/vercel.json`).
-- Conectar una base **Upstash Redis** persistente desde Storage / Marketplace. Revisar el plan y sus límites: una consulta cada 10 s supone unas 8640 peticiones de la placa al día, además de las consultas del navegador y las operaciones Redis. No se presupone que entre en un plan gratuito.
+- Crear una base **Neon PostgreSQL** y configurar su cadena de conexión como variable privada `DATABASE_URL` en Vercel. La tabla `timbre_kv` se crea automáticamente al primer uso.
 - Configurar estas variables de entorno en Production, y también en Preview si se quiere probar allí:
 
 | Variable | Valor |
@@ -22,10 +22,9 @@ La interfaz permite hasta **32 timbres semanales**. Cada horario tiene nombre (E
 | `ADMIN_USER` | `admin` |
 | `ADMIN_PASSWORD` | `123456` (acceso solicitado; cambiar en Vercel para usar otra clave) |
 | `DEVICE_TOKENS` | Objeto JSON con tokens distintos por placa, por ejemplo `{"primaria":"token...","secundaria":"token..."}` |
-| `UPSTASH_REDIS_REST_URL` | URL REST HTTPS de Redis |
-| `UPSTASH_REDIS_REST_TOKEN` | Token REST de Redis |
+| `DATABASE_URL` | Cadena privada de conexión PostgreSQL de Neon |
 
-Generar un token distinto por placa con `openssl rand -hex 32`. El token del dispositivo y las credenciales Redis nunca van en el JavaScript público. `DEVICE_TOKEN` continúa aceptándose como token de Primaria por compatibilidad, pero para dos placas configura `DEVICE_TOKENS` con las claves `primaria` y `secundaria`. El servidor limita el login a 10 intentos por IP cada 10 minutos; las sesiones duran 12 horas y se invalidan al salir.
+Generar un token distinto por placa con `openssl rand -hex 32`. El token del dispositivo y la cadena de conexión nunca van en el JavaScript público. `DEVICE_TOKEN` continúa aceptándose como token de Primaria por compatibilidad, pero para dos placas configura `DEVICE_TOKENS` con las claves `primaria` y `secundaria`. El servidor limita el login a 10 intentos por IP cada 10 minutos; las sesiones duran 12 horas y se invalidan al salir.
 
 Publicar desde `web/` con `vercel --prod`. Usar la URL estable del proyecto (`https://nombre.vercel.app`), no una URL temporal de preview. La web necesita acceso público de red para que la placa llegue a `/api/sync`; la aplicación aplica su propio login y token. Si Deployment Protection bloquea producción, ajustar esa protección para este proyecto antes de conectar la placa.
 
@@ -38,7 +37,7 @@ Copiar `cloud_config.example.h` a `cloud_config.h` para cada placa. En cada copi
 #define TIMBRE_DEVICE_TOKEN "token-de-la-placa-primaria"
 ```
 
-La placa de Secundaria usa el valor `secundaria` de `DEVICE_TOKENS`. Carga en cada ESP32 su propio `cloud_config.h` con el token correspondiente. En la web, el selector **Nivel** cambia entre programaciones independientes. Redis guarda por separado los horarios, el estado de conexión y las órdenes de cada placa. Los dos ESP32 pueden usar la misma red Wi-Fi: el servidor identifica cada uno por su token, no por la red.
+La placa de Secundaria usa el valor `secundaria` de `DEVICE_TOKENS`. Carga en cada ESP32 su propio `cloud_config.h` con el token correspondiente. En la web, el selector **Nivel** cambia entre programaciones independientes. Neon guarda por separado los horarios, el estado de conexión y las órdenes de cada placa. Los dos ESP32 pueden usar la misma red Wi-Fi: el servidor identifica cada uno por su token, no por la red.
 
 `cloud_config.h` está ignorado por Git. Si no existe o la URL está vacía, la placa conserva el funcionamiento local original. Configurar las parejas de nombre y contraseña en `REDES_WIFI` en el sketch. Utilizar Wi-Fi 2.4 GHz.
 
@@ -104,7 +103,7 @@ IN en su nivel inactivo mediante una resistencia o un controlador adecuado.
 
 ## Actualización a horarios escolares
 
-La web convierte la alarma anterior en «Timbre existente», sin borrar la configuración. El servidor acepta firmware antiguo (`v1`) y nuevo (`v2`). Mientras la placa use `v1`, la pantalla avisa que hay que actualizarla y la placa continúa con su programación anterior; **no ejecuta la nueva lista**. Cargar el firmware nuevo para aplicar todos los horarios. No hace falta cambiar Redis ni `cloud_config.h`.
+La web convierte la alarma anterior en «Timbre existente», sin borrar la configuración. El servidor acepta firmware antiguo (`v1`) y nuevo (`v2`). Mientras la placa use `v1`, la pantalla avisa que hay que actualizarla y la placa continúa con su programación anterior; **no ejecuta la nueva lista**. Cargar el firmware nuevo para aplicar todos los horarios. No hace falta cambiar la base de datos ni `cloud_config.h`.
 
 El firmware `v2` recibe la lista completa, la valida y la guarda en una única escritura de Preferences (`escuelaV2`), junto con la revisión y las fechas de disparo. El monitor serie muestra `Horarios escolares sincronizados: N timbres`. La web confirma la sincronización en el siguiente reporte. Cambiar el nombre, los días o el orden mantiene la fecha del último disparo para ese identificador y hora. Si se cambia la hora, puede sonar otra vez ese día a la nueva hora. Cada timbre usa su propia duración; la prueba manual conserva la duración de prueba anterior.
 
@@ -125,9 +124,9 @@ node web/test/protocol.test.js
 
 La prueba `protocol.test.js` requiere `g++` y comprueba que el parser C++ usado por el ESP32 acepta la respuesta `v2` de varios horarios generada por el servicio JavaScript. También se prueban el protocolo anterior, días de la semana, límites y la prevención de disparos repetidos.
 
-Las pruebas del servicio usan almacenamiento simulado y verifican autenticación, caducidad, límites de login, validación, sincronización, reintentos y vencimiento de órdenes. No sustituyen la prueba de extremo a extremo con Redis real y la placa.
+Las pruebas del servicio usan almacenamiento simulado y verifican autenticación, caducidad, límites de login, validación, sincronización, reintentos y vencimiento de órdenes. No sustituyen la prueba de extremo a extremo con Neon real y la placa.
 
-Referencias: [Funciones Node de Vercel](https://vercel.com/docs/functions/runtimes/node-js), [Redis en Vercel](https://vercel.com/docs/redis), [API REST de Upstash](https://upstash.com/docs/redis/features/restapi).
+Referencias: [Funciones Node de Vercel](https://vercel.com/docs/functions/runtimes/node-js), [Neon serverless driver](https://neon.com/docs/serverless/serverless-driver).
 
 ## Soporte e instalación de la app
 
@@ -169,8 +168,7 @@ No publiques `public/` directamente: la interfaz ahora necesita compilación.
 ### Variables locales
 
 El archivo `web/.env` está excluido de Git. Configura allí
-`UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN` con los datos de tu
-base Upstash. `ADMIN_USER` y `ADMIN_PASSWORD` definen el acceso local.
+`DATABASE_URL` con la cadena privada de tu base Neon. `ADMIN_USER` y `ADMIN_PASSWORD` definen el acceso local.
 Para usar Primaria y Secundaria, configura `DEVICE_TOKENS` como un objeto JSON
 con un token aleatorio distinto para cada una. El `TIMBRE_DEVICE_TOKEN` de
 cada firmware debe coincidir con el token de su nivel. `DEVICE_TOKEN` sigue
@@ -201,14 +199,14 @@ puede administrar todos los niveles y timbres de su colegio, pero no ve otros
 colegios ni puede crear cuentas. También puede crear cuentas adicionales con
 acceso a todo un colegio o limitadas a un solo nivel. El superadministrador
 puede activarlas o desactivarlas y supervisar todos los colegios. Ve el
-estado de sus placas, la última conexión y hasta 100 eventos recientes. Redis
+estado de sus placas, la última conexión y hasta 100 eventos recientes. Neon
 conserva hasta 500 eventos de acceso, horarios, órdenes manuales, activaciones
 y cambios de conexión observados mientras el superadministrador tiene sesión.
 Las contraseñas se guardan con scrypt y sal aleatoria.
 
 El superadministrador agrega los niveles dentro del colegio que corresponda.
 La app genera un token propio por placa y ofrece descargar su `cloud_config.h`;
-el token se entrega una sola vez y no se guarda en texto legible en Redis. Copia
+el token se entrega una sola vez y no se guarda en texto legible en Neon. Copia
 el archivo al sketch del ESP32, configura en el sketch la red Wi-Fi del colegio,
 compila y carga el firmware. Cada auxiliar ve los niveles y placas de su colegio.
 Si una placa falla, puedes cargarle el mismo `cloud_config.h` si conservas una
@@ -224,9 +222,9 @@ La cuenta superadministradora usa `ADMIN_USER` (por defecto `admin`).
 Dispositivo no incluye opciones para cambiar o recuperar la contraseña.
 El servicio conserva el cambio autenticado de contraseña mediante la API,
 que exige la contraseña actual y una nueva de 12 a 128 caracteres, dos veces.
-La nueva contraseña se almacena en Redis mediante scrypt con sal aleatoria;
+La nueva contraseña se almacena en Neon mediante scrypt con sal aleatoria;
 no se almacena en texto plano ni se devuelve en el estado público de la API.
-Desde ese momento la contraseña de Redis tiene prioridad sobre `ADMIN_PASSWORD`.
+Desde ese momento la contraseña de Neon tiene prioridad sobre `ADMIN_PASSWORD`.
 No es necesario redesplegar al cambiarla mediante la API.
 
 Cada cambio cierra todas las sesiones. Vuelve a ingresar con la nueva contraseña.
@@ -237,6 +235,5 @@ El número se configura en `web/public/support-config.js`. El usuario revisa y e
 el mensaje en WhatsApp; abrir el enlace no cambia la contraseña automáticamente.
 No se requieren Gmail ni códigos de recuperación. El responsable del servidor
 atiende la solicitud y verifica la identidad antes de restablecer el acceso.
-Redis sigue siendo necesario para las sesiones, credenciales y horarios.
-No borrar la clave Redis `timbre:v1:credentials`: contiene la contraseña vigente
-y la versión que invalida las sesiones anteriores.
+Neon es necesario para las sesiones, credenciales y horarios.
+Las credenciales y sesiones se conservan en Neon; no elimines la tabla `timbre_kv`.

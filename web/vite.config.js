@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => ({
     configureServer(server) {
       // Estas variables pertenecen al servidor; no se exponen al navegador.
       const env = loadEnv(mode, server.config.root, '');
-      for (const name of ['ADMIN_USER', 'ADMIN_PASSWORD', 'DEVICE_TOKEN', 'DEVICE_TOKENS', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN']) {
+      for (const name of ['ADMIN_USER', 'ADMIN_PASSWORD', 'DEVICE_TOKEN', 'DEVICE_TOKENS', 'DATABASE_URL']) {
         if (process.env[name] === undefined && env[name] !== undefined) process.env[name] = env[name];
       }
       server.middlewares.use(async (req, res, next) => {

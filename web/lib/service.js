@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual, scrypt } from 'node:crypto';
 import { promisify } from 'node:util';
+import { createNeonStore } from './neon-store.js';
 const deriveKey = promisify(scrypt);
 
 export class HttpError extends Error {
@@ -60,18 +61,7 @@ export function validarAlarmas(value) {
   }
   return result.sort((a,b) => a.hora.localeCompare(b.hora) || a.id.localeCompare(b.id));
 }
-export async function redis(...command) {
-  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL, token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
-  if (!url?.startsWith('https://') || !token) throw new HttpError(503, 'Falta conectar Redis en Vercel');
-  const response = await fetch(url, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(command), signal: AbortSignal.timeout(7000)
-  });
-  if (!response.ok) throw new HttpError(503, 'Almacenamiento no disponible');
-  const data = await response.json();
-  if (data.error) throw new HttpError(503, 'Almacenamiento no disponible');
-  return data.result;
-}
+export const neonStore = createNeonStore();
 const parse = value => value ? JSON.parse(value) : null;
 const CONFIG_CAS = `-- compare-and-set schedule
 local old=redis.call('GET',KEYS[1])
@@ -85,7 +75,7 @@ local old=redis.call('GET',KEYS[1]) or ''
 if old~=ARGV[1] then return 0 end
 redis.call('SET',KEYS[1],ARGV[2])
 return 1`;
-export function createService(db = redis, env = process.env, clock = () => Math.floor(Date.now() / 1000)) {
+export function createService(db = neonStore, env = process.env, clock = () => Math.floor(Date.now() / 1000)) {
   const deviceTokens = devicesFrom(env);
   async function limited(name, maximum = 10) {
     const bucket = key(`${name}:${Math.floor(clock() / 600)}`);
