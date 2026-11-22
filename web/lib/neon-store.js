@@ -46,19 +46,25 @@ export function createNeonStore(env = process.env) {
       case 'EVAL': {
         const [, , key, expected, next] = args;
         if (args[0].includes('compare-and-set')) {
-          const current=await get(key);
-          const revision=current ? (args[0].includes('credentials') ? current : JSON.parse(current).revision) : (args[0].includes('credentials') ? '' : '-');
-          if (revision!==expected) return 0;
-          await set(key,next); return 1;
+          const rows = args[0].includes('credentials')
+            ? await q`INSERT INTO timbre_kv(key,value) VALUES (${key},${next}) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE timbre_kv.value=${expected} RETURNING key`
+            : await q`INSERT INTO timbre_kv(key,value) VALUES (${key},${next}) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE COALESCE(timbre_kv.value::jsonb->>'revision','-')=${expected} RETURNING key`;
+          return rows.length ? 1 : 0;
         }
         const [, , configKey, telemetryKey, commandKey, config, telemetry] = args;
-        await init();
-        const current=await get(configKey), previous=await get(telemetryKey), command=await get(commandKey);
-        await q.transaction([
-          q`INSERT INTO timbre_kv(key,value) VALUES (${configKey},${config}) ON CONFLICT(key) DO NOTHING`,
-          q`INSERT INTO timbre_kv(key,value) VALUES (${telemetryKey},${telemetry}) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-        ]);
-        return [current || config, command, previous];
+        const rows=await q`WITH previous AS (
+            SELECT value FROM timbre_kv WHERE key=${telemetryKey}
+          ), initialized AS (
+            INSERT INTO timbre_kv(key,value) VALUES (${configKey},${config})
+            ON CONFLICT(key) DO NOTHING RETURNING value
+          ), reported AS (
+            INSERT INTO timbre_kv(key,value) VALUES (${telemetryKey},${telemetry})
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value RETURNING value
+          )
+          SELECT COALESCE((SELECT value FROM initialized), (SELECT value FROM timbre_kv WHERE key=${configKey})) AS config,
+            (SELECT value FROM timbre_kv WHERE key=${commandKey} AND (expires_at IS NULL OR expires_at>now())) AS command,
+            (SELECT value FROM previous) AS previous`;
+        return [rows[0].config, rows[0].command ?? null, rows[0].previous ?? null];
       }
       default: throw new Error(`Operación no soportada: ${command}`);
     }

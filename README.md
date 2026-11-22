@@ -1,6 +1,6 @@
 # Timbre escolar ESP32 con control remoto en Vercel
 
-Proyecto creado: **timbre-esp32**. URL de producción: https://timbre-esp32.vercel.app
+Proyecto creado: **timbre-esp32**. URL de producción: https://timbre-manuel-scorza-iot.vercel.app/
 
 Estado de la preparación: web escolar y API publicadas, Neon PostgreSQL configurado mediante variables privadas de Production, login y token del dispositivo configurados, y `cloud_config.h` local preparado. El firmware escolar compila y las pruebas de servicio, protocolo C++ y navegador pasan. Para ejecutar varios horarios hay que cargar esta nueva versión en la placa; la web detecta y avisa si aún usa el protocolo anterior. La programación existente se conserva durante la transición.
 

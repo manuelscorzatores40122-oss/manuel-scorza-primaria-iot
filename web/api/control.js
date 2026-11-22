@@ -47,6 +47,9 @@ export default async function handler(req, res) {
     return res.status(200).json({ ...result, user, dispositivos: disponibles });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 503;
+    if (req.localDevelopment && !(error instanceof HttpError)) {
+      console.error(`[api] ${req.method} ${req.url}:`, error);
+    }
     return res.status(status).send(error instanceof HttpError ? error.message : 'Servicio temporalmente no disponible');
   }
 }

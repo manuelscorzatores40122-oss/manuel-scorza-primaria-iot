@@ -28,9 +28,12 @@ export default defineConfig(({ mode }) => ({
           }
           req.query = { action: url.pathname === '/api/control' ? url.searchParams.get('action') : url.pathname.slice(5), device: url.searchParams.get('device') || 'primaria' };
           req.body = body;
+          req.localDevelopment = true;
           await handler(req, res);
         } catch {
           if (!res.writableEnded) res.status(500).send('Servicio temporalmente no disponible');
+        } finally {
+          console.info(`[local-api] ${req.method} ${url.pathname} -> ${res.statusCode || 200}`);
         }
       });
     }

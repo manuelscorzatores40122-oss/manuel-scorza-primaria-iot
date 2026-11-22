@@ -60,9 +60,11 @@ function mostrarLogin(mensaje = '', tipo = 'info') {
 async function pedir(url, body) {
  const g = generacion;
  const ctrl=new AbortController(), timer=setTimeout(()=>ctrl.abort(),10000);
+ let respuestaRecibida = false;
  try {
   const scoped = ['/login','/logout','/cambiar-clave','/administracion','/cuenta','/crear-nivel','/crear-colegio','/estado-cuenta','/renovar-token'].includes(url) || !dispositivoActual ? '' : `?device=${encodeURIComponent(dispositivoActual)}`;
   const r=await fetch('/api'+url+scoped,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'X-Timbre-Request':'1'},body:body===undefined?undefined:new URLSearchParams(body),cache:'no-store',signal:ctrl.signal});
+  respuestaRecibida = true;
   if(r.status===401){
    const error = new Error(url === '/login' ? 'Usuario o contraseña incorrectos. Revisa tus datos e inténtalo de nuevo.' : 'Tu sesión venció. Vuelve a ingresar para continuar.');
    if (url !== '/login') { error.sesionCerrada=true; if (g === generacion) mostrarLogin(autenticado ? error.message : '', 'error'); }
@@ -73,7 +75,11 @@ async function pedir(url, body) {
    throw new Error(texto || 'No se pudo completar la acción. Vuelve a intentar.');
   }
   return await leerJson(r);
- }catch(e){if(e.name==='AbortError'||e instanceof TypeError)throw new Error('No se pudo conectar. Vuelve a intentar.');throw e;}finally{clearTimeout(timer);}
+ }catch(e){
+  if(import.meta.env.DEV)console.error(`[api-client] ${url}${respuestaRecibida?' (respuesta recibida)':''}:`,e);
+  if(e.name==='AbortError'||(!respuestaRecibida&&e instanceof TypeError))throw new Error('No se pudo conectar. Vuelve a intentar.');
+  throw e;
+ }finally{clearTimeout(timer);}
 }
 function renderLista() {
  const all=datos?.alarmas||[], list=all.filter(a=>filtro<0||(a.dias&(1<<filtro))).sort((a,b)=>a.hora.localeCompare(b.hora));
