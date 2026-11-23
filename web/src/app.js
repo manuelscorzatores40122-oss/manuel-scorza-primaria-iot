@@ -189,7 +189,7 @@ async function consultar() {
    }
   }
  }
- setTimeout(consultar,esperaManual ? 2000 : 10000);
+ setTimeout(consultar,esperaManual || (datos?.online && datos?.pendiente) ? 2000 : 10000);
 }
 for (const [formulario, aviso] of [['loginForm','loginError'],['alarmForm','editorError']]) {
  $(formulario).noValidate=true;

@@ -99,6 +99,10 @@ uint32_t inicioEncendido  = 0;
 uint32_t ultimaRevision   = 0;
 uint32_t ultimoIntentoWiFi = 0;
 size_t siguienteRedWiFi = 0;
+String redesUsuarioSSID[4], redesUsuarioClave[4];
+size_t cantidadRedesUsuario = 0;
+bool portalWiFiActivo = false;
+char clavePortalWiFi[16] = {};
 uint32_t ultimoDia        = 0;     // AAAAMMDD del ultimo disparo
 bool     mdnsIniciado     = false;
 bool     wifiAnterior     = false;
@@ -231,8 +235,10 @@ void revisarHorario() {
     }
     if (segundos) {
       // Una escritura atomica conserva los ultimos disparos de todos los timbres.
-      if (memoria.putBytes("escuelaV2", &escuela, sizeof(escuela)) == sizeof(escuela)) encenderPor(segundos);
-      else Serial.println("No se pudo guardar el disparo escolar");
+      if (memoria.putBytes("escuelaV2", &escuela, sizeof(escuela)) == sizeof(escuela)) {
+        Serial.printf("HORARIO ESCOLAR ACTIVADO: %02d:%02d, %u s\n", t.tm_hour, t.tm_min, segundos);
+        encenderPor(segundos);
+      } else Serial.println("No se pudo guardar el disparo escolar");
     }
     return;
   }
@@ -256,12 +262,38 @@ void revisarHorario() {
 // ===================================
 // WIFI (no bloqueante tras el arranque)
 // ===================================
+void iniciarPortalWiFi() {
+  if (portalWiFiActivo) return;
+  snprintf(clavePortalWiFi, sizeof(clavePortalWiFi), "T%08lx", (unsigned long)esp_random());
+  WiFi.mode(WIFI_AP_STA);
+  if (WiFi.softAP("Timbre-Config", clavePortalWiFi)) {
+    portalWiFiActivo = true;
+    Serial.printf("Portal WiFi: SSID=Timbre-Config clave=%s URL=http://192.168.4.1/wifi\n", clavePortalWiFi);
+  } else Serial.println("No se pudo iniciar el portal WiFi");
+}
+
+void detenerPortalWiFi() {
+  if (!portalWiFiActivo) return;
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  portalWiFiActivo = false;
+  Serial.println("Portal WiFi cerrado: placa conectada a una red guardada");
+}
+
 void intentarSiguienteRedWiFi() {
-  const RedWiFi& red = REDES_WIFI[siguienteRedWiFi];
-  siguienteRedWiFi = (siguienteRedWiFi + 1) % CANTIDAD_REDES_WIFI;
+  size_t total = cantidadRedesUsuario + CANTIDAD_REDES_WIFI;
+  if (!total) { iniciarPortalWiFi(); return; }
+  size_t indice = siguienteRedWiFi;
+  siguienteRedWiFi = (siguienteRedWiFi + 1) % total;
   WiFi.disconnect();
-  Serial.printf("Conectando a WiFi: %s\n", red.nombre);
-  WiFi.begin(red.nombre, red.clave);
+  if (indice < cantidadRedesUsuario) {
+    Serial.printf("Conectando a WiFi configurada: %s\n", redesUsuarioSSID[indice].c_str());
+    WiFi.begin(redesUsuarioSSID[indice].c_str(), redesUsuarioClave[indice].c_str());
+  } else {
+    const RedWiFi& red = REDES_WIFI[indice - cantidadRedesUsuario];
+    Serial.printf("Conectando a WiFi: %s\n", red.nombre);
+    WiFi.begin(red.nombre, red.clave);
+  }
   ultimoIntentoWiFi = millis();
 }
 
@@ -271,6 +303,7 @@ void mantenerWiFi() {
   if (conectado != wifiAnterior) {
     wifiAnterior = conectado;
     if (conectado) {
+      detenerPortalWiFi();
       Serial.printf("WiFi conectado a %s. IP: ", WiFi.SSID().c_str());
       Serial.println(WiFi.localIP());
     } else {
@@ -286,8 +319,9 @@ void mantenerWiFi() {
       mdnsIniciado = true;
       Serial.printf("Disponible en http://%s.local\n", HOSTNAME);
     }
-  } else if (millis() - ultimoIntentoWiFi >= INTERVALO_RECONEXION) {
-    intentarSiguienteRedWiFi();
+  } else {
+    if (!portalWiFiActivo && millis() - ultimoIntentoWiFi >= INTERVALO_RECONEXION) iniciarPortalWiFi();
+    if (millis() - ultimoIntentoWiFi >= INTERVALO_RECONEXION) intentarSiguienteRedWiFi();
   }
 }
 
@@ -423,6 +457,43 @@ void iniciarSesion() {
   tokenSesion = token;
   inicioSesion = millis();
   servidor.sendHeader("Set-Cookie", "timbre_session=" + tokenSesion + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
+  servidor.send(200, "application/json", "{\"ok\":true}");
+}
+
+void enviarPortalWiFi() {
+  servidor.sendHeader("Cache-Control", "no-store");
+  servidor.send(200, "text/html; charset=utf-8", R"HTML(<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Configurar Wi-Fi del timbre</title><style>body{font:16px system-ui;max-width:440px;margin:40px auto;padding:0 18px;background:#111;color:#fff}input,button{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:10px;border:1px solid #555;background:#222;color:#fff}button{background:#9690ff;color:#111;font-weight:bold}</style><h1>Configurar Wi-Fi</h1><p>Inicia sesión como administrador de la placa. Usa una red de 2.4 GHz.</p><section id="login"><input id="usuario" autocomplete="username" placeholder="Usuario"><input id="clave" type="password" autocomplete="current-password" placeholder="Contraseña"><button onclick="entrar()">Iniciar sesión</button></section><section id="config" hidden><form onsubmit="guardar(event)"><label>Nombre de red (SSID)<input id="ssid" maxlength="32" required></label><label>Contraseña Wi-Fi<input id="pass" type="password" maxlength="63"></label><button>Guardar red y conectar</button></form></section><p id="estado" role="status"></p><script>async function entrar(){let r=await fetch('/login',{method:'POST',headers:{'X-Timbre-Request':'1','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({usuario:document.getElementById('usuario').value,clave:document.getElementById('clave').value})});if(!r.ok){document.getElementById('estado').textContent='Credenciales incorrectas';return}document.getElementById('login').hidden=true;document.getElementById('config').hidden=false;document.getElementById('estado').textContent='Acceso de administrador confirmado'}async function guardar(e){e.preventDefault();let r=await fetch('/wifi/guardar',{method:'POST',headers:{'X-Timbre-Request':'1','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:document.getElementById('ssid').value,clave:document.getElementById('pass').value})});document.getElementById('estado').textContent=r.ok?'Red guardada. La placa intentará conectarse; el portal se cerrará al conectar.':await r.text()}</script></html>)HTML");
+}
+
+void guardarRedWiFi() {
+  if (!proteger()) return;
+  String ssid = servidor.arg("ssid"), clave = servidor.arg("clave");
+  ssid.trim();
+  if (ssid.isEmpty() || ssid.length() > 32 || clave.length() > 63) {
+    servidor.send(400, "text/plain; charset=utf-8", "SSID o contraseña inválidos");
+    return;
+  }
+  size_t indice = cantidadRedesUsuario;
+  for (size_t i = 0; i < cantidadRedesUsuario; ++i) {
+    if (redesUsuarioSSID[i] == ssid) { indice = i; break; }
+  }
+  if (indice == 4 && cantidadRedesUsuario == 4) {
+    servidor.send(400, "text/plain; charset=utf-8", "La placa admite hasta cuatro redes guardadas");
+    return;
+  }
+  redesUsuarioSSID[indice] = ssid;
+  redesUsuarioClave[indice] = clave;
+  if (indice == cantidadRedesUsuario) ++cantidadRedesUsuario;
+  for (size_t i = 0; i < cantidadRedesUsuario; ++i) {
+    char ssidKey[8], passKey[8];
+    snprintf(ssidKey, sizeof(ssidKey), "wssid%u", (unsigned)i);
+    snprintf(passKey, sizeof(passKey), "wpass%u", (unsigned)i);
+    memoria.putString(ssidKey, redesUsuarioSSID[i]);
+    memoria.putString(passKey, redesUsuarioClave[i]);
+  }
+  memoria.putUChar("wcount", cantidadRedesUsuario);
+  siguienteRedWiFi = 0;
+  ultimoIntentoWiFi = millis() - INTERVALO_RECONEXION;
   servidor.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -622,7 +693,7 @@ void tareaNube(void*) {
         http.end();
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
 
@@ -684,6 +755,15 @@ void setup() {
   memoria.begin("luces", false);
   cargarConfig();
   cargarHorarioEscolar();
+  cantidadRedesUsuario = memoria.getUChar("wcount", 0);
+  if (cantidadRedesUsuario > 4) cantidadRedesUsuario = 4;
+  for (size_t i = 0; i < cantidadRedesUsuario; ++i) {
+    char ssidKey[8], passKey[8];
+    snprintf(ssidKey, sizeof(ssidKey), "wssid%u", (unsigned)i);
+    snprintf(passKey, sizeof(passKey), "wpass%u", (unsigned)i);
+    redesUsuarioSSID[i] = memoria.getString(ssidKey, "");
+    redesUsuarioClave[i] = memoria.getString(passKey, "");
+  }
 
   // WiFi
   WiFi.mode(WIFI_STA);
@@ -701,6 +781,7 @@ void setup() {
     Serial.print(".");
   }
   Serial.println();
+  if (WiFi.status() != WL_CONNECTED) iniciarPortalWiFi();
   ultimoIntentoWiFi = millis();
 
   // Hora de Peru por NTP
@@ -713,6 +794,10 @@ void setup() {
   // Rutas web
   servidor.on("/", HTTP_GET, []() {
     servidor.sendHeader("Cache-Control", "no-store");
+    if (portalWiFiActivo) {
+      enviarPortalWiFi();
+      return;
+    }
     // Con Vercel configurado, abre la interfaz actual del sistema en producción.
     // La interfaz embebida antigua queda disponible explícitamente en /local.
     if (nubeConfigurada()) {
@@ -726,6 +811,8 @@ void setup() {
     servidor.sendHeader("Cache-Control", "no-store");
     servidor.send_P(200, "text/html; charset=utf-8", PAGINA);
   });
+  servidor.on("/wifi", HTTP_GET, enviarPortalWiFi);
+  servidor.on("/wifi/guardar", HTTP_POST, guardarRedWiFi);
   servidor.on("/login", HTTP_POST, iniciarSesion);
   servidor.on("/logout", HTTP_POST, cerrarSesion);
   servidor.on("/estado", HTTP_GET, enviarEstado);
@@ -733,6 +820,11 @@ void setup() {
   servidor.on("/apagar", HTTP_POST, apagarManual);
   servidor.on("/programar", HTTP_POST, guardarProgramacion);
   servidor.onNotFound([]() {
+    if (portalWiFiActivo) {
+      servidor.sendHeader("Location", "http://192.168.4.1/wifi", true);
+      servidor.send(302, "text/plain", "Portal de configuración Wi-Fi");
+      return;
+    }
     servidor.send(404, "text/plain", "No encontrado");
   });
   servidor.begin();
